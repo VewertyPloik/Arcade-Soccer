@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Penalty Shootout + Rapid Fire</title>
+  <style>
+    body {
+      background: #2c7a2c;
+      font-family: Arial, sans-serif;
+      color: white;
+      text-align: center;
+      margin: 0; padding: 0;
+      user-select: none;
+    }
+    #homeScreen, #gameScreen {
+      width: 400px;
+      margin: 30px auto;
+      background: linear-gradient(to top, #4caf50 0%, #81c784 100%);
+      border: 4px solid white;
+      border-radius: 10px;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    #homeScreen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #gameArea {
+      margin: 20px auto;
+      width: 360px;
+      height: 220px;
+      background: #aeea00;
+      border: 5px solid white;
+      border-radius: 0 0 20px 20px;
+      position: relative;
+      cursor: pointer;
+    }
+    #ball {
+      width: 30px;
+      height: 30px;
+      background: radial-gradient(circle, white 40%, black 100%);
+      border-radius: 50%;
+      position: absolute;
+      bottom: 20px;
+      left: 165px;
+      transition: left 0.6s ease, bottom 0.6s ease;
+      pointer-events: none;
+    }
+    #goalie {
+      position: absolute;
+      top: 50px;
+      left: 150px;
+      font-size: 60px;
+      transition: left 0.6s ease;
+      user-select: none;
+    }
+    button {
+      margin-top: 20px;
+      font-size: 22px;
+      padding: 10px 30px;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #1e88e5;
+      color: white;
+    }
+    #info {
+      margin-top: 15px;
+      font-size: 20px;
+    }
+    #message {
+      margin-top: 15px;
+      font-size: 22px;
+      font-weight: bold;
+      min-height: 28px;
+    }
+    #timer {
+      margin-top: 10px;
+      font-size: 18px;
+    }
+    #highscore {
+      margin-top: 10px;
+      font-size: 18px;
+    }
+    #modeButtons button {
+      margin: 8px;
+      width: 180px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="homeScreen">
+  <h1>Choose Game Mode</h1>
+  <div id="modeButtons">
+    <button id="modePenalty">Penalty Shootout (5 Levels)</button>
+    <button id="modeRapid">Rapid Fire (30s)</button>
+  </div>
+  <div id="highscorePenalty">Loading Penalty Shootout Highscore...</div>
+  <div id="highscoreRapid">Loading Rapid Fire Highscore...</div>
+</div>
+
+<div id="gameScreen" style="display:none;">
+  <div id="gameArea">
+    <div id="goalie">🧍‍♂️</div>
+    <div id="ball"></div>
+  </div>
+
+  <div id="info"></div>
+  <div id="timer"></div>
+  <div id="message"></div>
+  <button id="quitBtn">Quit to Home</button>
+</div>
+
+<script>
+  // Elements
+  const homeScreen = document.getElementById('homeScreen');
+  const gameScreen = document.getElementById('gameScreen');
+  const modePenaltyBtn = document.getElementById('modePenalty');
+  const modeRapidBtn = document.getElementById('modeRapid');
+  const quitBtn = document.getElementById('quitBtn');
+  const ball = document.getElementById('ball');
+  const goalie = document.getElementById('goalie');
+  const gameArea = document.getElementById('gameArea');
+  const info = document.getElementById('info');
+  const timerDisplay = document.getElementById('timer');
+  const message = document.getElementById('message');
+  const highscorePenaltyDisplay = document.getElementById('highscorePenalty');
+  const highscoreRapidDisplay = document.getElementById('highscoreRapid');
+
+  // Constants & State
+  const maxLevel = 5;
+  const shotsPerLevel = 5;
+  const goaliePositions = [30, 110, 190, 270];
+  const shotSuccessChance = {
+    1: 0.80,
+    2: 0.65,
+    3: 0.50,
+    4: 0.30,
+    5: 0.20,
+  };
+
+  const HIGH_SCORE_PENALTY_KEY = 'penaltyShootoutHighScore';
+  const HIGH_SCORE_RAPID_KEY = 'rapidFireHighScore';
+
+  let mode = null; // 'penalty' or 'rapid'
+  let level, score, shootInProgress, startTime, timerInterval, rapidTimeLeft;
+
+  // Utils: localStorage for highscores
+  function loadHighscore(key) {
+    const data = localStorage.getItem(key);
+    if (data) {
+      try {
+        return JSON.parse(data);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function saveHighscore(key, scoreData) {
+    const current = loadHighscore(key);
+    // Save if better (higher level or higher score or same level/score but faster time)
+    if (!current) {
+      localStorage.setItem(key, JSON.stringify(scoreData));
+      return true;
+    }
+
+    if (key === HIGH_SCORE_PENALTY_KEY) {
+      if (
+        scoreData.levelCompleted > current.levelCompleted ||
+        (scoreData.levelCompleted === current.levelCompleted && scoreData.time < current.time)
+      ) {
+        localStorage.setItem(key, JSON.stringify(scoreData));
+        return true;
+      }
+    } else if (key === HIGH_SCORE_RAPID_KEY) {
+      if (
+        scoreData.goals > current.goals ||
+        (scoreData.goals === current.goals && scoreData.time < current.time)
+      ) {
+        localStorage.setItem(key, JSON.stringify(scoreData));
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function updateHighscoreDisplays() {
+    const hsPenalty = loadHighscore(HIGH_SCORE_PENALTY_KEY);
+    if (hsPenalty) {
+      highscorePenaltyDisplay.textContent = `Penalty Shootout Highscore: Level ${hsPenalty.levelCompleted}, Time: ${hsPenalty.time.toFixed(2)}s`;
+    } else {
+      highscorePenaltyDisplay.textContent = 'Penalty Shootout Highscore: None yet';
+    }
+
+    const hsRapid = loadHighscore(HIGH_SCORE_RAPID_KEY);
+    if (hsRapid) {
+      highscoreRapidDisplay.textContent = `Rapid Fire Highscore: ${hsRapid.goals} goals, Time: ${hsRapid.time.toFixed(2)}s`;
+    } else {
+      highscoreRapidDisplay.textContent = 'Rapid Fire Highscore: None yet';
+    }
+  }
+
+  // Reset ball and goalie positions for Penalty mode
+  function resetPositions() {
+    ball.style.left = '165px';
+    ball.style.bottom = '20px';
+    goalie.style.left = '150px';
+  }
+
+  // Helper for Penalty mode: find nearest goalie pos to ball x
+  function nearestGoalieIndex(x) {
+    let nearestIndex = 0;
+    let minDist = Math.abs(goaliePositions[0] - x);
+    for (let i = 1; i < goaliePositions.length; i++) {
+      const dist = Math.abs(goaliePositions[i] - x);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestIndex = i;
+      }
+    }
+    return nearestIndex;
+  }
+
+  // Timer management
+  function startTimer(duration = 0) {
+    startTime = performance.now();
+    if (timerInterval) clearInterval(timerInterval);
+
+    if (mode === 'penalty') {
+      timerInterval = setInterval(() => {
+        const elapsed = (performance.now() - startTime) / 1000;
+        timerDisplay.textContent = `Time: ${elapsed.toFixed(2)}s`;
+      }, 100);
+    } else if (mode === 'rapid') {
+      rapidTimeLeft = duration;
+      timerDisplay.textContent = `Time Left: ${rapidTimeLeft.toFixed(2)}s`;
+
+      timerInterval = setInterval(() => {
+        rapidTimeLeft -= 0.1;
+        if (rapidTimeLeft <= 0) {
+          rapidTimeLeft = 0;
+          timerDisplay.textContent = `Time Left: 0.00s`;
+          clearInterval(timerInterval);
+          endRapidFire();
+        } else {
+          timerDisplay.textContent = `Time Left: ${rapidTimeLeft.toFixed(2)}s`;
+        }
+      }, 100);
+    }
+  }
+
+  function stopTimer() {
+    clearInterval(timerInterval);
+  }
+
+  // Penalty Shootout mode shooting logic
+  function penaltyShootTo(x) {
+    if (shootInProgress) return;
+    shootInProgress = true;
+    message.textContent = '';
+
+    x = Math.max(0, Math.min(360, x));
+
+    ball.style.left = x + 'px';
+    ball.style.bottom = '140px';
+
+    // Goalie guesses nearest position
+    let goalieIndex = nearestGoalieIndex(x);
+
+    // Goalie guesses wrong sometimes (40%-10% chance depending on level)
+    if (Math.random() > (0.4 + 0.1 * level)) {
+      const wrongIndices = goaliePositions.map((_, i) => i).filter(i => i !== goalieIndex);
+      goalieIndex = wrongIndices[Math.floor(Math.random() * wrongIndices.length)];
+    }
+    goalie.style.left = goaliePositions[goalieIndex] + 'px';
+
+    // Determine if ball is close enough to goalie to be saved (60px range)
+    const goaliePos = goaliePositions[goalieIndex];
+    const distToGoalie = Math.abs(goaliePos - x);
+
+    // Shot success depends on chance and if goalie is close enough to save
+    const shotSuccessRandom = Math.random() < shotSuccessChance[level];
+    const saved = !shotSuccessRandom && distToGoalie <= 60;
+
+    setTimeout(() => {
+      if (saved) {
+        message.textContent = 'Saved by the goalie!';
+      } else {
+        message.textContent = 'GOAL!!!';
+        score++;
+        scoreDisplay.textContent = score;
+      }
+
+      setTimeout(() => {
+        resetPositions();
+
+        if (score >= shotsPerLevel) {
+          if (level >= maxLevel) {
+            stopTimer();
+            const totalTime = (performance.now() - startTime) / 1000;
+            message.textContent = `You won all 5 levels! 🎉 Time: ${totalTime.toFixed(2)}s`;
+
+            // Save highscore
+            const savedHS = saveHighscore(HIGH_SCORE_PENALTY_KEY, {levelCompleted: maxLevel, time: totalTime});
+            if (savedHS) {
+              message.textContent += ' New Highscore!';
+              updateHighscoreDisplays();
+            }
+            shootInProgress = false;
+            return;
+          } else {
+            level++;
+            score = 0;
+            levelDisplay.textContent = level;
+            scoreDisplay.textContent = score;
+            message.textContent = `Level ${level} - Tap inside the goal to shoot!`;
+          }
+        } else {
+          message.textContent += ' Tap inside the goal to shoot again.';
+        }
+        shootInProgress = false;
+      }, 1200);
+    }, 600);
+  }
+
+  // Rapid Fire mode shooting logic
+  function rapidFireShoot() {
+    if (shootInProgress) return;
+    shootInProgress = true;
+    message.textContent = '';
+
+    // Random ball horizontal position between 30 and 330
+    const randomX = 30 + Math.random() * 300;
+    ball.style.left = randomX + 'px';
+    ball.style.bottom = '140px';
+
+    // 50% chance to score
+    const shotSuccess = Math.random() < 0.5;
+
+    setTimeout(() => {
+      if (shotSuccess) {
+        message.textContent = 'GOAL!!!';
+        score++;
+        info.textContent = `Goals: ${score}`;
+      } else {
+        message.textContent = 'Missed!';
+      }
+
+      setTimeout(() => {
+        ball.style.bottom = '20px';
+        shootInProgress = false;
+      }, 400);
+    }, 400);
+  }
+
+  // End Rapid Fire mode
+  function endRapidFire() {
+    message.textContent = `Time’s up! You scored ${score} goals.`;
+
+    // Save highscore
+    const totalTime = 30;
+    const savedHS = saveHighscore(HIGH_SCORE_RAPID_KEY, {goals: score, time: totalTime});
+    if (savedHS) {
+      message.textContent += ' New Highscore!';
+      updateHighscoreDisplays();
+    }
+
+    // Disable shooting after end
+    shootInProgress = true;
+  }
+
+  // Start Penalty Shootout mode
+  function startPenaltyMode() {
+    mode = 'penalty';
+    homeScreen.style.display = 'none';
+    gameScreen.style.display = 'block';
+    level = 1;
+    score = 0;
+    shootInProgress = false;
+
+    goalie.style.display = 'block';
+    info.textContent = `Level: ${level} | Score: ${score} / ${shotsPerLevel}`;
+    timerDisplay.textContent = 'Time: 0.00s';
+    message.textContent = `Level 1 - Tap inside the goal to shoot!`;
+    levelDisplay.textContent = level;
+    scoreDisplay.textContent = score;
+
+    resetPositions();
+    updateHighscoreDisplays();
+    startTimer();
+  }
+
+  // Start Rapid Fire mode
+  function startRapidMode() {
+    mode = 'rapid';
+    homeScreen.style.display = 'none';
+    gameScreen.style.display = 'block';
+    score = 0;
+    shootInProgress = false;
+
+    goalie.style.display = 'none';
+    info.textContent = `Goals: ${score}`;
+    timerDisplay.textContent = `Time Left: 30.00s`;
+    message.textContent = `Tap quickly to score goals!`;
+
+    resetPositions();
+    updateHighscoreDisplays();
+    startTimer(30);
+  }
+
+  // On game area click:
+  gameArea.addEventListener('click', (e) => {
+    if (shootInProgress) return;
+
+    if (mode === 'penalty') {
+      const rect = gameArea.getBoundingClientRect();
+      const relativeX = e.clientX - rect.left;
+      penaltyShootTo(relativeX);
+    } else if (mode === 'rapid') {
+      rapidFireShoot();
+    }
+  });
+
+  // Quit button returns to home
+  quitBtn.addEventListener('click', () => {
+    stopTimer();
+    homeScreen.style.display = 'block';
+    gameScreen.style.display = 'none';
+    updateHighscoreDisplays();
+    mode = null;
+    message.textContent = '';
+    info.textContent = '';
+    timerDisplay.textContent = '';
+    resetPositions();
+  });
+
+  // Mode select buttons
+  modePenaltyBtn.addEventListener('click', () => {
+    startPenaltyMode();
+  });
+  modeRapidBtn.addEventListener('click', () => {
+    startRapidMode();
+  });
+
+  // For Penalty mode score display
+  const levelDisplay = document.createElement('span');
+  const scoreDisplay = document.createElement('span');
+  // We append these inside #info for penalty mode
+  // but info is replaced by text in rapid, so re-append when mode changes
+  function updatePenaltyScoreDisplay() {
+    info.textContent = '';
+    const levelSpan = document.createElement('span');
+    levelSpan.textContent = `Level: ${level} | `;
+    const scoreSpan = document.createElement('span');
+    scoreSpan.textContent = `Score: ${score} / ${shotsPerLevel}`;
+    info.appendChild(levelSpan);
+    info.appendChild(scoreSpan);
+    levelDisplay.textContent = level;
+    scoreDisplay.textContent = score;
+  }
+
+  // Initialize highscores on load
+  updateHighscoreDisplays();
+
+</script>
+
+</body>
+</html>
